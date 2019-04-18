@@ -1,0 +1,11 @@
+<users>
+	<user>
+		<username>[username]</username>
+		<password>[pwd]</password>
+		<firstname>[firstname]</firstname>
+		<lastname>[lastname]</lastname>
+		<email>[email]</email>
+		<active>1</active>
+		<designer>0</designer>
+	</user>
+</users>

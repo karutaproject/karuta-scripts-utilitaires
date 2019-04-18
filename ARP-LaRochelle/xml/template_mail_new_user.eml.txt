@@ -1,0 +1,13 @@
+Bonjour,
+
+Votre compte pour vous connecter à Karuta (portfolio) vient d'être créé.
+Vous pouvez y accéder à l'aide de votre navigateur eu utilisant ce lien :
+https://votre-url-karuta
+
+Veuillez trouver ci dessous vos identifiants :
+Votre identifiant  : [login]
+Votre mot de passe : [mdp]
+
+Ceci est un mail automatique, merci de ne pas y répondre.
+
+Cordialement.
