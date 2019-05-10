@@ -6,8 +6,10 @@
 # $2 : diplome (suffixe ajouté au code et libellé de l'instance)
 # $3 : sauvegarde DB (1 par defaut)
 
-# Traitement d'un fichier xml (FILE_COMPETENCES) constitué d'une liste de compétences et Résultats d'acquisition.
-# - instanciation d'une nouvelle composante basée sur la composante modèle des compétences, puis pour chaque ligne du fichier xml :
+# Traitement d'un fichier csv (FILE_COMPETENCES) constitué d'une liste
+#   de compétences et Résultats d'acquisition.
+# - instanciation d'une nouvelle composante basée sur la composante modèle des compétences,
+#   puis pour chaque ligne du fichier csv :
 # - ajout de la compétence et RA
 #
 
@@ -52,11 +54,14 @@ CONTENT_TYPE='Content-type:application/xml'
 #------------
 
 XZ="/usr/bin/xz"
+MYSQLDUMP="/usr/bin/mysqldump"
 DIR_COMPETENCES="./competences"    # dossier où sont situés les fichiers csv
 FILE_COMPETENCES="$DIR_COMPETENCES/$1"
 IMPORT_FILENAME="./tmp/data_import.csv"
 LOG_FILENAME="import_competences.log"
 DEBUG=true    #-> dans ./tmp/import_competences.log
+debut_RA="\&lt;p\&gt;Liste des résultats d'apprentissage de cette compétence :\&lt;\\/p\&gt; \&lt;ul\&gt;"
+fin_RA="\&lt;\\/ul\&gt;"
 #------------
 
 
@@ -83,10 +88,10 @@ then
 fi
 
 
-# Convertion du fichier win->linux
+# Conversion du fichier win->linux
 #---------------------------------
-dos2unix $FILE_COMPETENCES     #suppression des ^M en fin de ligne
-grep -v '^#' $FILE_COMPETENCES|iconv -f ISO-8859-1 -t UTF-8  > $IMPORT_FILENAME    #supp. ligne commentaire + gestion des car. accentués
+dos2unix $FILE_COMPETENCES     # Suppression des ^M en fin de ligne
+grep -v '^#' $FILE_COMPETENCES|iconv -f ISO-8859-1 -t UTF-8  > $IMPORT_FILENAME    # Supp. ligne commentaire + gestion des car. accentués
 
 # Avant tout, sauvegarde de la bdd :
 #---------------------------------------
@@ -98,8 +103,7 @@ fi
 if [ $save_db = 1 ]
 then
   FORMATTED_DATE=`/bin/date +'%Y%m%d%H%M%S'`
-  # MYSQL_PWD=$PWD_MARIADB $DIR_MARIADB/bin/mysqldump --user $USR_MARIADB --databases $DBN_MARIADB | $XZ -9z >$DIR_DUMP/karuta-backend-import-$FORMATTED_DATE.sql.xz
-  MYSQL_PWD=mysqldump --host=$SRV_DB --user=$USR_MARIADB --password=$PWD_MARIADB --databases $DBN_MARIADB | $XZ -9z >$DIR_DUMP/karuta-backend-$FORMATTED_DATE.sql.xz
+  $MYSQLDUMP --host=$SRV_DB --user=$USR_MARIADB --password=$PWD_MARIADB --databases $DBN_MARIADB | $XZ -9z >$DIR_DUMP/karuta-backend-$FORMATTED_DATE.sql.xz
   debug "-> Sauvegarde BDD effectuée !"
 fi
 
@@ -130,6 +134,7 @@ debug "-> en retour=$?"
 
 # Je change quelques infos sur la copie :
 curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X GET -k "$API_PATH/portfolios/portfolio/$id_new_composante">./tmp/portfolio.xml
+# le titre :
 sed -i "s/<label lang=\"fr\">$LABEL_COMPETENCES/<label lang=\"fr\">$PREFIX_LABEL_COMPETENCES $DIPLOME/g" ./tmp/portfolio.xml
 # Le label de la section compétences :
 string_to_replace=$(xmllint --xpath "string(//asmStructure[metadata/@semantictag='$SEMANTICTAG_MODELE_COMPOSANTE']/asmResource[1]/label[@lang='fr'])" ./tmp/portfolio.xml)
@@ -148,7 +153,7 @@ debug "-> id_node_parent_modele_competence=$id_node_parent_modele_competence"
 id_node_modele_competence=$(xmllint --xpath "string(//asmResource[code='$CODE_MODELE_COMPETENCE']/../@id)" ./tmp/portfolio1.xml)
 debug "-> id_node_modele_competence=$id_node_modele_competence"
 
-# Import
+# Import des compétences
 #------
 while IFS=';' read c_rubrique c_competence c_RA unused1 unused2 unused3 libelle
 do line="$c_rubrique $c_competence $c_RA $unused1 $unused2 $unused3 $libelle"
@@ -160,11 +165,13 @@ do line="$c_rubrique $c_competence $c_RA $unused1 $unused2 $unused3 $libelle"
   libelle=$(echo "$libelle" | sed  s/'\/'/'\\\/'/g)  # '/' -> '\/'
   # Fin
 
-
+  # RA = Résultat d'apprentissage. Chaque compétence contient un certain nombre de RA.
   libelle_RA=""
   libelle_competence=""
+  # Si ce n'est pas un RA
   if test -z $c_RA
   then
+    # c_competence indique le code de la compétence
     if test -z $c_competence
     then
       continue
@@ -185,14 +192,18 @@ do line="$c_rubrique $c_competence $c_RA $unused1 $unused2 $unused3 $libelle"
 
   case $prec_code_competence in
     "")
+      # premiere iteration de $prec_code_competence
       prec_code_competence=$c_rubrique.$c_competence
       prec_libelle_competence=$libelle_competence
-      liste_RA="Liste des résultats d'apprentissage de cette compétence :\&lt;br\&gt;\&lt;br\&gt;\&lt;div\&gt; \&lt;ul\&gt;"
+      liste_RA=$debut_RA
       ;;
+      # $prec_code_competence existe et on est en train d'ajouter une nouvelle RA
     $code_competence)
       liste_RA=$liste_RA"\&lt;li\&gt;"$libelle_RA"\&lt;\\/li\&gt;"
       ;;
     *)
+      # $prec_code_competence existe mais c'est un nouveau code :
+      # on finalise donc la compétences précédente.
       # je duplique le noeud competence :
       new_node_competence=$(curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X POST -k "$API_PATH/nodes/node/copy/"$id_node_parent_modele_competence"?srcetag=ModeleCompetence-etudiant&srcecode=$CODE_MODELE_COMPETENCE")
       if [[ $new_node_competence =~ "erreur" ]]
@@ -222,15 +233,16 @@ do line="$c_rubrique $c_competence $c_RA $unused1 $unused2 $unused3 $libelle"
         url_encode="${url_encode// /\%20}"
         curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X GET -k $url_encode>./tmp/ra.xml
 
+        # On ferme les balises ouvertes dans liste_RA
+        liste_RA=$liste_RA$fin_RA
         # je change le label des RAs :
-        liste_RA=$liste_RA"\&lt;\\/ul\&gt;\&lt;\\/div\&gt;"
         sed -i "s/<text lang=\"fr\">Liste des RA/<text lang=\"fr\">$liste_RA/g" ./tmp/ra.xml
 
         curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X PUT -k -H $CONTENT_TYPE $API_PATH/resources/resource/$contextid_node_ra --data @./tmp/ra.xml>./tmp/response2.xml
         fi
       prec_code_competence=$c_rubrique.$c_competence
       prec_libelle_competence=$libelle_competence
-      liste_RA="Liste des résultats d'apprentissage de cette compétence :\&lt;br\&gt;\&lt;br\&gt;\&lt;div\&gt; \&lt;ul\&gt;"
+      liste_RA=$debut_RA
       ;;
   esac
 
@@ -261,14 +273,15 @@ else
   curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X PUT -k -H $CONTENT_TYPE $API_PATH/nodes/node/$new_node_competence --data @./tmp/competence.xml>./tmp/response.xml
 
   # RESULTAT D'ACQUISITION
-  # je repere l'id resource RA pour la maj :
+  # je repere l'id resource RA pour la maj
   contextid_node_ra=$(xmllint --xpath "string(//asmResource[code='codelisteRA']/@contextid)" ./tmp/competence.xml)
   url_encode="$API_PATH/resources/resource/$contextid_node_ra"
   url_encode="${url_encode// /\%20}"
   curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X GET -k $url_encode>./tmp/ra.xml
 
-  # je change le label des RAs :
-  liste_RA=$liste_RA"\&lt;\\/ul\&gt;\&lt;\\/div\&gt;"
+  # On ferme les balises ouvertes dans liste_RA
+  liste_RA=$liste_RA$fin_RA
+  # Maj du label des RAs
   sed -i "s/<text lang=\"fr\">Liste des RA/<text lang=\"fr\">$liste_RA/g" ./tmp/ra.xml
 
   debug "-> id resource RA=$contextid_node_ra"
