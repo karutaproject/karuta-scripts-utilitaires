@@ -6,10 +6,8 @@
 # $2 : diplome (suffixe ajouté au code et libellé de l'instance)
 # $3 : sauvegarde DB (1 par defaut)
 
-# Traitement d'un fichier csv (FILE_COMPETENCES) constitué d'une liste
-#   de compétences et Résultats d'acquisition.
-# - instanciation d'une nouvelle composante basée sur la composante modèle des compétences,
-#   puis pour chaque ligne du fichier csv :
+# Traitement d'un fichier csv (FILE_COMPETENCES) constitué d'une liste de compétences et Résultats d'acquisition.
+# - instanciation d'une nouvelle composante basée sur la composante modèle des compétences, puis pour chaque ligne du fichier csv :
 # - ajout de la compétence et RA
 #
 
@@ -19,6 +17,7 @@
 
 # Attention : il faut d'abord indiquer le mdp root dans le fichier xml/login.xml
 
+# Plus d'infos sur l'API Karuta : https://github.com/karutaproject/karuta-backend/blob/master/Documentation/REST_API.md
 
 #-----------------
 # Base de données
@@ -39,7 +38,7 @@ PREFIX_CODE_COMPETENCES="competences"     #prefixe pour le code de la nouvelle c
 PREFIX_LABEL_COMPETENCES="Composante competences"     #prefixe pour le libellé de la nouvelle composante
 LABEL_COMPETENCES="Composante competences"    # libellé de la Composante competences
 TEMPLATE_COMPOSANTES="$PROJECT_ID.composante-competences"    # code de la Composante competences
-SEMANTICTAG_MODELE_COMPOSANTE="Section-CompetencesDeLaFormation"    # tag semantic de 'Compétences de la formation' dans la Composante competences
+SEMANTICTAG_MODELE_COMPOSANTE="Section-CompetencesDeLaFormation"    # tag semantique de 'Compétences de la formation' dans la Composante competences
 CODE_MODELE_COMPETENCE="c999"     # code du modele de competence ('Ma compétence' dans la Composante competences)
 DIPLOME=$2
 
@@ -49,11 +48,12 @@ DIPLOME=$2
 #----------------
 DOMAIN_NAME=$HOSTNAME
 API_PATH="https://$DOMAIN_NAME/karuta-backend/rest/api"
-COOKIE_FILEPATH="/tmp/cookies.txt"
+COOKIE_FILEPATH="./tmp/cookies.txt"
 CONTENT_TYPE='Content-type:application/xml'
 #------------
 
 XZ="/usr/bin/xz"
+XMLSTARLET="/usr/bin/xmlstarlet"
 MYSQLDUMP="/usr/bin/mysqldump"
 DIR_COMPETENCES="./competences"    # dossier où sont situés les fichiers csv
 FILE_COMPETENCES="$DIR_COMPETENCES/$1"
@@ -102,15 +102,20 @@ then
 fi
 if [ $save_db = 1 ]
 then
+  debug "-> Sauvegarde BDD"
   FORMATTED_DATE=`/bin/date +'%Y%m%d%H%M%S'`
   $MYSQLDUMP --host=$SRV_DB --user=$USR_MARIADB --password=$PWD_MARIADB --databases $DBN_MARIADB | $XZ -9z >$DIR_DUMP/karuta-backend-$FORMATTED_DATE.sql.xz
-  debug "-> Sauvegarde BDD effectuée !"
 fi
 
 # Connexion et récupération du cookie :
 #-------------------------------------
-debug "-> Connexion"
+debug "-> Connexion à Karuta"
 curl --noproxy $DOMAIN_NAME -c $COOKIE_FILEPATH -X POST -k -H $CONTENT_TYPE $API_PATH/credential/login --data @./xml/login.xml>./tmp/response.xml
+
+if [ ! -f $COOKIE_FILEPATH ]; then
+  echo "Cookie not found!"
+  exit
+fi
 
 echo "----------------------------------------"
 echo "-> TRAITEMENT DU FICHIER COMPETENCES ..."
@@ -121,7 +126,11 @@ url_encode="$API_PATH/portfolios/portfolio/code/$TEMPLATE_COMPOSANTES"
 url_encode="${url_encode// /\%20}"
 curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X GET -k $url_encode>./tmp/response.xml
 id_composante_template=$(xmllint --xpath 'string(/portfolio/@id)' ./tmp/response.xml)
-debug "-> id du modele composante=$id_composante_template "
+debug "-> id du modele composante=$id_composante_template"
+if [ -z "$id_composante_template" ]; then
+  echo "Template competences introuvable !"
+  exit
+fi
 
 # Copie de la composante modele
 targetcode="$PROJECT_ID.$PREFIX_CODE_COMPETENCES $DIPLOME"
@@ -142,12 +151,16 @@ sed -i "s/$string_to_replace/Compétences $DIPLOME/g" ./tmp/portfolio.xml
 curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X PUT -k -H $CONTENT_TYPE $API_PATH/portfolios/portfolio/$id_new_composante --data @./tmp/portfolio.xml>./tmp/response.xml
 
 # Pour la gestion des sauts de ligne :
-xml ed ./tmp/portfolio.xml>./tmp/portfolio1.xml
+$XMLSTARLET ed ./tmp/portfolio.xml>./tmp/portfolio1.xml
 
 prec_code_competence=""
 prec_libelle_competence=""
 id_node_parent_modele_competence=$(xmllint --xpath "string(//asmRoot/asmStructure/metadata[@semantictag='$SEMANTICTAG_MODELE_COMPOSANTE']/../@id)" ./tmp/portfolio1.xml)
 debug "-> id_node_parent_modele_competence=$id_node_parent_modele_competence"
+if [ -z "$id_node_parent_modele_competence" ]; then
+  echo "SEMANTICTAG MODELE COMPOSANTE introuvable !"
+  exit
+fi
 
 # Structure modèle de compétence :
 id_node_modele_competence=$(xmllint --xpath "string(//asmResource[code='$CODE_MODELE_COMPETENCE']/../@id)" ./tmp/portfolio1.xml)
@@ -184,11 +197,12 @@ do line="$c_rubrique $c_competence $c_RA $unused1 $unused2 $unused3 $libelle"
     code_RA=$c_rubrique.$c_RA
   fi
 
-
+  debug "----------------------------"
   debug "-> code_rubrique=$c_rubrique"
   debug "-> code_competence=$code_competence"
   debug "-> code_RA=$code_RA"
   debug "-> libelle=$libelle"
+  debug "----------------------------"
 
   case $prec_code_competence in
     "")
@@ -205,11 +219,13 @@ do line="$c_rubrique $c_competence $c_RA $unused1 $unused2 $unused3 $libelle"
       # $prec_code_competence existe mais c'est un nouveau code :
       # on finalise donc la compétences précédente.
       # je duplique le noeud competence :
-      new_node_competence=$(curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X POST -k "$API_PATH/nodes/node/copy/"$id_node_parent_modele_competence"?srcetag=ModeleCompetence-etudiant&srcecode=$CODE_MODELE_COMPETENCE")
+      # voir doc Karuta : /nodes/node/[copy|import]/{dest-id}?srcetag={semantictag}&srcecode={code}
+      new_node_competence=$(curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X POST -k "$API_PATH/nodes/node/copy/$id_node_parent_modele_competence?srcetag=ModeleCompetence-etudiant&srcecode=$CODE_MODELE_COMPETENCE")
       if [[ $new_node_competence =~ "erreur" ]]
       then
         # erreur
-        debug "-> erreur lors de la creation de la nouvelle compétence"
+        # possibilité : Subquery returns more than 1 row
+        debug "### erreur lors de la creation de la nouvelle compétence : $new_node_competence"
       else
         debug "-> nouveau noeud competence : $new_node_competence"
 
@@ -251,12 +267,12 @@ done < $IMPORT_FILENAME
 # Traitement pour la dernière compétence :
 #----------------------------------------
 # je duplique le noeud competence :
-new_node_competence=$(curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X POST -k "$API_PATH/nodes/node/copy/"$id_node_parent_modele_competence"?srcetag=ModeleCompetence-etudiant&srcecode=c97")
+new_node_competence=$(curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X POST -k "$API_PATH/nodes/node/copy/"$id_node_parent_modele_competence"?srcetag=ModeleCompetence-etudiant&srcecode=$CODE_MODELE_COMPETENCE")
 
 if [[ $new_node_competence =~ "erreur" ]]
 then
   # erreur
-  debug "-> erreur lors de la creation de la nouvelle compétence"
+  debug "### erreur lors de la creation de la dernière compétence : $new_node_competence"
 else
   debug "-> nouveau noeud competence : $new_node_competence"
 
@@ -273,7 +289,7 @@ else
   curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X PUT -k -H $CONTENT_TYPE $API_PATH/nodes/node/$new_node_competence --data @./tmp/competence.xml>./tmp/response.xml
 
   # RESULTAT D'ACQUISITION
-  # je repere l'id resource RA pour la maj
+  # je repere l'id ressource RA pour la maj :
   contextid_node_ra=$(xmllint --xpath "string(//asmResource[code='codelisteRA']/@contextid)" ./tmp/competence.xml)
   url_encode="$API_PATH/resources/resource/$contextid_node_ra"
   url_encode="${url_encode// /\%20}"
