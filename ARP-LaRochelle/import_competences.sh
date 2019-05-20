@@ -135,15 +135,14 @@ fi
 # Copie de la composante modele
 targetcode="$PROJECT_ID.$PREFIX_CODE_COMPETENCES $DIPLOME"
 
-targetcode_encode="${targetcode// /\%20}"
+targetcode_encode="${targetcode// /%20}"
 debug "-> targetcode=$targetcode_encode"
+
 id_new_composante=$(curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X POST -k "$API_PATH/portfolios/copy/$id_composante_template?targetcode=$targetcode_encode&owner=true")
 debug "-> id_new_composante copié=$id_new_composante"
-debug "-> en retour=$?"
 
 # Je change quelques infos sur la copie :
 curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X GET -k "$API_PATH/portfolios/portfolio/$id_new_composante">./tmp/portfolio.xml
-# le titre :
 sed -i "s/<label lang=\"fr\">$LABEL_COMPETENCES/<label lang=\"fr\">$PREFIX_LABEL_COMPETENCES $DIPLOME/g" ./tmp/portfolio.xml
 # Le label de la section compétences :
 string_to_replace=$(xmllint --xpath "string(//asmStructure[metadata/@semantictag='$SEMANTICTAG_MODELE_COMPOSANTE']/asmResource[1]/label[@lang='fr'])" ./tmp/portfolio.xml)
@@ -167,7 +166,7 @@ id_node_modele_competence=$(xmllint --xpath "string(//asmResource[code='$CODE_MO
 debug "-> id_node_modele_competence=$id_node_modele_competence"
 
 # Import des compétences
-#------
+#-----------------------
 while IFS=';' read c_rubrique c_competence c_RA unused1 unused2 unused3 libelle
 do line="$c_rubrique $c_competence $c_RA $unused1 $unused2 $unused3 $libelle"
   debug "-> traitement de la ligne : $line"
@@ -179,6 +178,7 @@ do line="$c_rubrique $c_competence $c_RA $unused1 $unused2 $unused3 $libelle"
   # Fin
 
   # RA = Résultat d'apprentissage. Chaque compétence contient un certain nombre de RA.
+
   libelle_RA=""
   libelle_competence=""
   # Si ce n'est pas un RA
@@ -220,7 +220,7 @@ do line="$c_rubrique $c_competence $c_RA $unused1 $unused2 $unused3 $libelle"
       # on finalise donc la compétences précédente.
       # je duplique le noeud competence :
       # voir doc Karuta : /nodes/node/[copy|import]/{dest-id}?srcetag={semantictag}&srcecode={code}
-      new_node_competence=$(curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X POST -k "$API_PATH/nodes/node/copy/$id_node_parent_modele_competence?srcetag=ModeleCompetence-etudiant&srcecode=$CODE_MODELE_COMPETENCE")
+      new_node_competence=$(curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X POST -k "$API_PATH/nodes/node/copy/$id_node_parent_modele_competence?srcetag=ModeleCompetence-etudiant&srcecode=$targetcode_encode")
       if [[ $new_node_competence =~ "erreur" ]]
       then
         # erreur
@@ -242,7 +242,7 @@ do line="$c_rubrique $c_competence $c_RA $unused1 $unused2 $unused3 $libelle"
         curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X PUT -k -H $CONTENT_TYPE $API_PATH/nodes/node/$new_node_competence --data @./tmp/competence.xml>./tmp/response.xml
 
         # RESULTAT D'ACQUISITION
-        # je repere l'id resource RA pour la maj :
+        # je repere l'id ressource RA pour la maj :
         contextid_node_ra=$(xmllint --xpath "string(//asmResource[code='codelisteRA']/@contextid)" ./tmp/competence.xml)
         debug "-> id resource RA=$contextid_node_ra"
         url_encode="$API_PATH/resources/resource/$contextid_node_ra"
@@ -267,7 +267,7 @@ done < $IMPORT_FILENAME
 # Traitement pour la dernière compétence :
 #----------------------------------------
 # je duplique le noeud competence :
-new_node_competence=$(curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X POST -k "$API_PATH/nodes/node/copy/"$id_node_parent_modele_competence"?srcetag=ModeleCompetence-etudiant&srcecode=$CODE_MODELE_COMPETENCE")
+new_node_competence=$(curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X POST -k "$API_PATH/nodes/node/copy/"$id_node_parent_modele_competence"?srcetag=ModeleCompetence-etudiant&srcecode=$targetcode_encode")
 
 if [[ $new_node_competence =~ "erreur" ]]
 then
@@ -310,6 +310,4 @@ curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X DELETE -k $API_PATH/nodes/nod
 # deconnexion :
 #-------------
 curl --noproxy $DOMAIN_NAME -b $COOKIE_FILEPATH -X POST -k $API_PATH/credential/logout
-
 rm $COOKIE_FILEPATH
-# rm users.xml
